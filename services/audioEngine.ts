@@ -19,6 +19,9 @@ class AudioEngine {
   private kickDrum: Tone.MembraneSynth | null = null;
   private limiter: Tone.Limiter | null = null;
   
+  // A/V Recording Stream Node
+  private audioDest: MediaStreamAudioDestinationNode | null = null;
+  
   // Effects
   private reverb: Tone.Reverb | null = null;
   private saxVibrato: Tone.Vibrato | null = null;
@@ -40,6 +43,12 @@ class AudioEngine {
     // 1. Master Chain
     this.limiter = new Tone.Limiter(-1).toDestination();
     
+    // Initialize MediaStream Destination for A/V Recording
+    // We access the raw Web Audio Context to create the stream destination
+    const context = Tone.context.rawContext as AudioContext;
+    this.audioDest = context.createMediaStreamDestination();
+    this.limiter.connect(this.audioDest);
+    
     // Spacious Reverb for that Jazz Club feel
     this.reverb = new Tone.Reverb({ decay: 2.5, wet: 0.2 }).connect(this.limiter);
 
@@ -50,14 +59,14 @@ class AudioEngine {
 
     // --- INSTRUMENTS ---
 
-    // A. Right Hand: Vibes (Crystal/Glassy) - Kept from previous
+    // A. Right Hand: Vibes (Crystal/Glassy)
     this.leadSynth = new Tone.Synth({
       oscillator: { type: "triangle" }, 
       envelope: { attack: 0.005, decay: 0.3, sustain: 0.1, release: 1.0 },
       volume: -2
     }).connect(this.reverb);
 
-    // B. Left Hand: Tenor Saxophone (New)
+    // B. Left Hand: Tenor Saxophone
     this.saxSynth = new Tone.MonoSynth({
         oscillator: { type: "sawtooth" }, // Rich harmonics for "reedy" sound
         envelope: { 
@@ -76,7 +85,6 @@ class AudioEngine {
     }).connect(this.reverb);
 
     // Dynamic Filter for Expression (controlled by Hand X)
-    // LowPass with Resonance (Q) simulates the spectral change of blowing harder
     this.saxFilter = new Tone.Filter({
         frequency: 800,
         type: "lowpass",
@@ -150,7 +158,7 @@ class AudioEngine {
         const note = BASS_SCALE_NOTES[nextIndex];
         this.doubleBass.triggerAttackRelease(note, "4n", time);
         
-        // Visual callback for Bass (Fixed position - bottom center for visual pulse)
+        // Visual callback for Bass
         if (this.noteCallback) {
             Tone.Draw.schedule(() => {
                 this.noteCallback!('BASS', 0.5, 1.0);
@@ -193,6 +201,11 @@ class AudioEngine {
     // We could map energy to drum intensity here if desired
   }
 
+  // Helper to get the audio stream for the Video Recorder
+  public getAudioStream(): MediaStream | null {
+      return this.audioDest ? this.audioDest.stream : null;
+  }
+
   // Right Hand: Vibes (Quantized)
   public updateLead(y: number, x: number, trigger: boolean) {
     if (!this.leadSynth) return;
@@ -222,8 +235,6 @@ class AudioEngine {
       if (!this.saxSynth || !this.saxFilter) return;
 
       // 1. Expression (X-Axis -> Filter)
-      // Left (0) = Warm/Muffled (400Hz)
-      // Right (1) = Bright/Screaming (3000Hz)
       const filterFreq = 400 + (x * 2600);
       this.saxFilter.frequency.rampTo(filterFreq, 0.1);
 
@@ -232,14 +243,9 @@ class AudioEngine {
           const noteIndex = Math.floor(normalizedY * SAX_SCALE.length);
           const note = SAX_SCALE[noteIndex];
 
-          // Quantize to 8n to keep it locked to groove.
           const nextDiv = Tone.Transport.nextSubdivision("8n");
 
-          // CRITICAL FIX: Ensure start time is strictly greater than previous
-          // The previous code allowed re-triggering if noteIndex changed within the same subdivision,
-          // causing scheduling collisions.
           if (nextDiv > this.lastSaxTime) {
-              // Trigger note
               this.saxSynth.triggerAttackRelease(note, "4n", nextDiv); 
               this.lastSaxNoteIndex = noteIndex;
               this.lastSaxTime = nextDiv;

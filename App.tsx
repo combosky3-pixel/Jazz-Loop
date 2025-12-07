@@ -1,10 +1,15 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import JazzCanvas from './components/JazzCanvas';
 import { AppState } from './types';
 import { audioEngine } from './services/audioEngine';
 
 const App: React.FC = () => {
   const [appState, setAppState] = useState<AppState>(AppState.IDLE);
+  const [isRecording, setIsRecording] = useState(false);
+  
+  // Recording Refs
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<Blob[]>([]);
 
   const startExperience = async () => {
     setAppState(AppState.LOADING);
@@ -17,12 +22,108 @@ const App: React.FC = () => {
     }
   };
 
+  const handleToggleRecord = async () => {
+    if (!isRecording) {
+      startVideoRecording();
+    } else {
+      stopVideoRecording();
+    }
+  };
+
+  const startVideoRecording = () => {
+    // 1. Get Canvas Stream
+    const canvasElement = document.querySelector('canvas');
+    if (!canvasElement) {
+        console.error("Canvas not found for recording");
+        return;
+    }
+    // captureStream is not strictly in standard definitions for all browsers in TS, casting to any
+    const canvasStream = (canvasElement as any).captureStream(30); // 30 FPS
+    const videoTrack = canvasStream.getVideoTracks()[0];
+
+    // 2. Get Audio Stream
+    const audioStream = audioEngine.getAudioStream();
+    if (!audioStream) {
+        console.error("Audio stream not available");
+        return;
+    }
+    const audioTrack = audioStream.getAudioTracks()[0];
+
+    // 3. Combine Streams
+    const combinedStream = new MediaStream([videoTrack, audioTrack]);
+
+    // 4. Initialize Recorder
+    try {
+        // Try high quality codec first
+        const options = { mimeType: 'video/webm; codecs=vp9,opus' };
+        // Fallback checks (simple version)
+        if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+             console.warn("VP9/Opus not supported, falling back to default webm");
+             // @ts-ignore
+             options.mimeType = 'video/webm'; 
+        }
+
+        const recorder = new MediaRecorder(combinedStream, options);
+        recordedChunksRef.current = [];
+
+        recorder.ondataavailable = (event) => {
+            if (event.data && event.data.size > 0) {
+                recordedChunksRef.current.push(event.data);
+            }
+        };
+
+        recorder.onstop = saveVideoRecording;
+
+        recorder.start();
+        mediaRecorderRef.current = recorder;
+        setIsRecording(true);
+
+    } catch (e) {
+        console.error("Failed to start MediaRecorder:", e);
+    }
+  };
+
+  const stopVideoRecording = () => {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+          mediaRecorderRef.current.stop();
+          setIsRecording(false);
+      }
+  };
+
+  const saveVideoRecording = () => {
+      const blob = new Blob(recordedChunksRef.current, { type: 'video/webm' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.download = "My_Jazz_Performance.webm";
+      anchor.href = url;
+      anchor.click();
+      
+      // Cleanup
+      setTimeout(() => URL.revokeObjectURL(url), 100);
+      recordedChunksRef.current = [];
+  };
+
   return (
     <div className="relative w-screen h-screen bg-black text-white font-sans overflow-hidden">
       
       {/* Background Visualizer */}
       {(appState === AppState.RUNNING || appState === AppState.LOADING) && (
         <JazzCanvas appState={appState} setAppState={setAppState} />
+      )}
+
+      {/* Recording UI Controls */}
+      {appState === AppState.RUNNING && (
+        <button 
+            onClick={handleToggleRecord}
+            className={`absolute top-6 right-6 z-50 px-6 py-2 rounded-full font-bold border transition-all shadow-lg flex items-center gap-2 ${
+                isRecording 
+                ? 'bg-red-600 border-red-600 text-white animate-pulse' 
+                : 'bg-transparent border-white text-white hover:bg-white hover:text-black'
+            }`}
+        >
+            {isRecording && <div className="w-3 h-3 bg-white rounded-full animate-bounce" />}
+            {isRecording ? 'STOP & SAVE' : 'REC VIDEO'}
+        </button>
       )}
 
       {/* Start Overlay */}
@@ -32,12 +133,12 @@ const App: React.FC = () => {
             The Jazz Fluid Conductor
           </h1>
           <p className="max-w-xl text-gray-400 mb-8 text-lg">
-            A generative audio-visual experience. 
+            A generative audio-visual quartet.
             <br />
             <br />
-            <span className="text-cyan-400 font-bold">Right Hand:</span> Lead Melody & Attraction
+            <span className="text-cyan-400 font-bold">Right Hand:</span> Vibes & Neon
             <br />
-            <span className="text-purple-400 font-bold">Left Hand:</span> Harmony & Turbulence
+            <span className="text-purple-400 font-bold">Left Hand:</span> Saxophone & Gold
           </p>
           <button
             onClick={startExperience}
@@ -61,8 +162,8 @@ const App: React.FC = () => {
         <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-black p-8 text-center">
           <div className="text-red-500 text-6xl mb-4">⚠️</div>
           <h2 className="text-2xl font-bold mb-2">System Failure</h2>
-          <p className="text-gray-400">
-            Could not access Camera or Audio Context. Please refresh and allow permissions.
+          <p className="text-gray-400 max-w-md">
+            Camera access denied. Please check your browser permissions.
           </p>
           <button
             onClick={() => window.location.reload()}
@@ -73,11 +174,11 @@ const App: React.FC = () => {
         </div>
       )}
       
-      {/* Persistent UI Controls (Optional) */}
+      {/* Persistent UI Controls (Footer) */}
       {appState === AppState.RUNNING && (
-        <div className="absolute bottom-6 right-6 z-40">
+        <div className="absolute bottom-6 right-6 z-40 pointer-events-none">
            <div className="text-white/30 text-xs font-mono">
-              The Jazz Fluid Conductor v1.0
+              The Jazz Fluid Conductor v2.0 • A/V Recording Enabled
            </div>
         </div>
       )}

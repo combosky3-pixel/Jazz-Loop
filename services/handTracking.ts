@@ -1,3 +1,4 @@
+
 // Access global MediaPipe variables loaded via script tags in index.html
 declare const Hands: any;
 declare const Camera: any;
@@ -35,8 +36,8 @@ export class HandTracker {
           await this.hands.send({ image: this.videoElement });
         }
       },
-      width: 1280,
-      height: 720
+      width: 640, // Lower resolution for better compatibility/permissions
+      height: 480
     });
 
     await this.camera.start();
@@ -44,10 +45,11 @@ export class HandTracker {
 
   public stop() {
     if (this.camera) {
-      // Camera utils doesn't have a clean stop in some versions, 
-      // but stopping the stream helps.
+       // Try to stop the tracks on the source stream directly
        const stream = this.videoElement?.srcObject as MediaStream;
-       stream?.getTracks().forEach(track => track.stop());
+       if (stream) {
+         stream.getTracks().forEach(track => track.stop());
+       }
     }
     if (this.hands) {
       this.hands.close();

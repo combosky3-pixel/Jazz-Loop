@@ -1,4 +1,3 @@
-
 import React, { useEffect, useRef, useState } from 'react';
 import p5 from 'p5';
 import { HandTracker } from '../services/handTracking';
@@ -25,14 +24,13 @@ const JazzCanvas: React.FC<JazzCanvasProps> = ({ appState, setAppState }) => {
 
   // Visual Event State
   const shockwavesRef = useRef<any[]>([]);
-  const kickFlashRef = useRef<number>(0); // Alpha value for kick flash
-  const bassPulseRef = useRef<number>(0); // New Bass Pulse opacity
+  const kickPulseRef = useRef<number>(0); 
 
-  // Track previous positions for velocity calculation
+  // Velocity tracking
   const prevRightRef = useRef<{x:number, y:number} | null>(null);
   const prevLeftRef = useRef<{x:number, y:number} | null>(null);
 
-  const [debugMsg, setDebugMsg] = useState("Initializing Quartet...");
+  const [debugMsg, setDebugMsg] = useState("Initializing Neon Noir Engine...");
 
   useEffect(() => {
     if (appState !== AppState.RUNNING || !containerRef.current || !videoRef.current) return;
@@ -40,35 +38,24 @@ const JazzCanvas: React.FC<JazzCanvasProps> = ({ appState, setAppState }) => {
     // 1. Audio Callbacks
     audioEngine.onBeat((type) => {
         if (type === 'KICK') {
-            kickFlashRef.current = 100; // Trigger flash
+            kickPulseRef.current = 255; // Max pulse for vignette
         }
     });
 
     audioEngine.onNoteTriggered((type, x, y) => {
+        // Add shockwaves (Visual accents)
         if (type === 'LEAD') {
             shockwavesRef.current.push({
-                x: x, 
-                y: y,
-                size: 5, 
-                maxSize: 100,
-                alpha: 255,
-                color: [0, 255, 255], // Cyan (Vibes)
-                speed: 15
+                x: x, y: y, size: 10, maxSize: 150, alpha: 255,
+                color: [0, 255, 255], // Cyan
+                width: 2, speed: 10
             });
         } else if (type === 'SAX') {
-            // Gold/Brass Shockwaves for Sax
             shockwavesRef.current.push({
-                x: x, 
-                y: y,
-                size: 15, 
-                maxSize: 200,
-                alpha: 200,
-                color: [255, 215, 0], // Gold
-                speed: 8
+                x: x, y: y, size: 20, maxSize: 300, alpha: 200,
+                color: [255, 200, 50], // Gold
+                width: 4, speed: 5
             });
-        } else if (type === 'BASS') {
-            // Trigger floor pulse instead of a specific ripple
-            bassPulseRef.current = 200; 
         }
     });
 
@@ -83,7 +70,7 @@ const JazzCanvas: React.FC<JazzCanvasProps> = ({ appState, setAppState }) => {
           const classification = results.multiHandedness[index];
           const isRight = classification.label === 'Right';
           const tip = landmarks[8]; 
-          const coords = { x: 1 - tip.x, y: tip.y, z: tip.z }; // Mirror X
+          const coords = { x: 1 - tip.x, y: tip.y, z: tip.z }; 
 
           let velocity = 0;
           if (isRight) {
@@ -92,38 +79,21 @@ const JazzCanvas: React.FC<JazzCanvasProps> = ({ appState, setAppState }) => {
              }
              prevRightRef.current = coords;
              right = coords;
-             
-             if (velocity > 0.005) {
-                audioEngine.updateLead(coords.y, coords.x, true);
-             }
-
+             if (velocity > 0.005) audioEngine.updateLead(coords.y, coords.x, true);
           } else {
              if (prevLeftRef.current) {
                  velocity = Math.hypot(coords.x - prevLeftRef.current.x, coords.y - prevLeftRef.current.y);
              }
              prevLeftRef.current = coords;
              left = coords;
-             
-             // Update Sax
-             if (velocity > 0.005) {
-                audioEngine.updateSax(coords.y, coords.x, true);
-             } else {
-                // Still update filter if hand is present but slow
-                audioEngine.updateSax(coords.y, coords.x, false);
-             }
+             if (velocity > 0.005) audioEngine.updateSax(coords.y, coords.x, true);
+             else audioEngine.updateSax(coords.y, coords.x, false);
           }
           totalEnergy += velocity;
         }
       }
-
       audioEngine.setGlobalEnergy(Math.min(totalEnergy * 15, 1));
-
-      handStateRef.current = {
-        left,
-        right,
-        isLeftPinching: false,
-        isRightPinching: false
-      };
+      handStateRef.current = { left, right, isLeftPinching: false, isRightPinching: false };
     };
 
     handTrackerRef.current = new HandTracker(onHandResults);
@@ -136,97 +106,128 @@ const JazzCanvas: React.FC<JazzCanvasProps> = ({ appState, setAppState }) => {
 
     // 3. P5 Visualization
     const sketch = (p: p5) => {
-      const particleCount = 350; // Optimized count
-      const particles: Particle[] = [];
+      const particleCount = 400; 
+      const particles: RibbonParticle[] = [];
+      const smokeParticles: SmokeParticle[] = [];
 
       p.setup = () => {
         p.createCanvas(p.windowWidth, p.windowHeight);
         p.background(0);
         
+        // Initialize Ribbons
         for (let i = 0; i < particleCount; i++) {
-          particles.push(new Particle(p));
+          particles.push(new RibbonParticle(p));
+        }
+
+        // Initialize Volumetric Smoke (Fewer, larger particles)
+        for (let i = 0; i < 30; i++) {
+            smokeParticles.push(new SmokeParticle(p));
         }
       };
 
       p.draw = () => {
-        // Trail Effect (Long exposure look)
+        // --- 1. BLOOM / TRAIL EFFECT ---
+        // Very low opacity background refresh creates light accumulation (Bloom)
         p.blendMode(p.BLEND);
-        p.background(0, 30); 
+        p.background(5, 5, 10, 15); // Deep dark blue-black, high trails
 
-        // Kick Flash
-        if (kickFlashRef.current > 0) {
-            p.background(30, 30, 45, kickFlashRef.current);
-            kickFlashRef.current -= 10;
-        }
-
-        // Bass Floor Pulse (Dark Blue Glow at bottom)
-        if (bassPulseRef.current > 0) {
-            p.noStroke();
-            // Create a gradient-like rect stack for glow
-            for(let i = 0; i < 150; i+=10) {
-                let alpha = (bassPulseRef.current / 150) * (255 - (i * 1.5));
-                if (alpha < 0) alpha = 0;
-                p.fill(0, 0, 100, alpha * 0.5); // Deep Blue
-                p.rect(0, p.height - i, p.width, 10);
-            }
-            bassPulseRef.current -= 5;
-        }
-
-        // Shockwaves
+        // --- 2. VOLUMETRIC SMOKE LAYER ---
         p.blendMode(p.ADD);
-        p.noFill();
-        p.strokeWeight(3);
-        
-        for (let i = shockwavesRef.current.length - 1; i >= 0; i--) {
-            const sw = shockwavesRef.current[i];
-            p.stroke(sw.color[0], sw.color[1], sw.color[2], sw.alpha);
-            p.circle(sw.x * p.width, sw.y * p.height, sw.size);
-            
-            sw.size += sw.speed;
-            sw.alpha -= 5;
-            
-            if (sw.alpha <= 0) {
-                shockwavesRef.current.splice(i, 1);
-            }
+        for(let smoke of smokeParticles) {
+            smoke.update();
+            smoke.show();
         }
 
-        // --- PHYSICS ENGINE ---
+        // --- 3. PARTICLE RIBBONS ---
         const rh = handStateRef.current.right;
         const lh = handStateRef.current.left;
         
-        // Convert normalized hand coordinates to screen vectors
         const rhVec = rh ? p.createVector(rh.x * p.width, rh.y * p.height) : null;
         const lhVec = lh ? p.createVector(lh.x * p.width, lh.y * p.height) : null;
 
         for (const part of particles) {
-            // 1. Calculate Forces
+            // Physics
             const sep = part.separate(particles); 
             const flow = part.flow();             
-            
-            // Weighting
-            sep.mult(1.5); 
-            flow.mult(0.5); 
-
-            // Apply Base Forces
+            sep.mult(1.8); 
+            flow.mult(0.6); 
             part.applyForce(sep);
             part.applyForce(flow);
 
-            // 2. Hand Attraction (Seek)
+            // Hand Attraction & Color Logic
+            let attractForce = p.createVector(0,0);
+            let targetCol = p.color(50, 0, 120, 100); // Default Indigo/Purple
+
             if (rhVec) {
-                const seekForce = part.seek(rhVec);
-                seekForce.mult(0.8); 
-                part.applyForce(seekForce);
+                const f = part.seek(rhVec);
+                const d = p5.Vector.dist(part.pos, rhVec);
+                if (d < 300) {
+                    // Right Hand = Cyan/Ice
+                    targetCol = p.color(0, 255, 255, 200); 
+                    f.mult(1.2); 
+                }
+                attractForce.add(f);
             }
             if (lhVec) {
-                const seekForce = part.seek(lhVec);
-                seekForce.mult(0.6); 
-                part.applyForce(seekForce);
+                const f = part.seek(lhVec);
+                const d = p5.Vector.dist(part.pos, lhVec);
+                if (d < 300) {
+                    // Left Hand = Gold/Brass
+                    targetCol = p.color(255, 180, 50, 200);
+                    f.mult(0.9);
+                }
+                attractForce.add(f);
             }
 
-            // 3. Integration
+            part.applyForce(attractForce);
+            part.updateColor(targetCol);
             part.update();
             part.checkEdges();
-            part.show();
+            part.show(); // Draws ribbon
+        }
+
+        // --- 4. SHOCKWAVES ---
+        p.noFill();
+        for (let i = shockwavesRef.current.length - 1; i >= 0; i--) {
+            const sw = shockwavesRef.current[i];
+            p.stroke(sw.color[0], sw.color[1], sw.color[2], sw.alpha);
+            p.strokeWeight(sw.width);
+            p.circle(sw.x * p.width, sw.y * p.height, sw.size);
+            
+            sw.size += sw.speed;
+            sw.alpha -= 8; // Fade faster
+            
+            if (sw.alpha <= 0) shockwavesRef.current.splice(i, 1);
+        }
+
+        // --- 5. POST-PROCESSING (Vignette & Grain) ---
+        p.blendMode(p.MULTIPLY);
+        // Vignette Pulse synced to Kick
+        const ctx = p.drawingContext as CanvasRenderingContext2D;
+        const pulse = kickPulseRef.current;
+        if (pulse > 0) kickPulseRef.current -= 10;
+        
+        // Radial Gradient for Vignette
+        const grad = ctx.createRadialGradient(
+            p.width/2, p.height/2, p.height * 0.4, 
+            p.width/2, p.height/2, p.height * 1.2
+        );
+        grad.addColorStop(0, 'rgba(0,0,0,0)'); // Transparent center
+        // Edges get darker, pulse makes them slightly lighter/more dynamic? 
+        // Actually, let's make the pulse intensify the darkness or shift the stops
+        const edgeAlpha = 0.6 + (pulse / 1000); 
+        grad.addColorStop(1, `rgba(0,0,0,${edgeAlpha})`);
+        
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, p.width, p.height);
+
+        // Film Grain (Analog Noise)
+        p.blendMode(p.ADD); // Add noise on top
+        p.stroke(255, 15);
+        p.strokeWeight(1);
+        // Draw random points (optimization: dont draw full screen pixels)
+        for(let i=0; i<800; i++) {
+            p.point(p.random(p.width), p.random(p.height));
         }
       };
 
@@ -235,49 +236,81 @@ const JazzCanvas: React.FC<JazzCanvasProps> = ({ appState, setAppState }) => {
         p.background(0);
       };
 
-      // --- STEERING PHYSICS PARTICLE ---
-      class Particle {
+      // --- SMOKE PARTICLE CLASS ---
+      class SmokeParticle {
+          p: p5;
+          pos: p5.Vector;
+          vel: p5.Vector;
+          size: number;
+          offset: number;
+
+          constructor(p: p5) {
+              this.p = p;
+              this.pos = p.createVector(p.random(p.width), p.random(p.height));
+              this.vel = p.createVector(p.random(-0.5, 0.5), p.random(-0.5, 0.5));
+              this.size = p.random(200, 500);
+              this.offset = p.random(1000);
+          }
+
+          update() {
+              this.pos.add(this.vel);
+              if (this.pos.x < -this.size) this.pos.x = this.p.width + this.size;
+              if (this.pos.x > this.p.width + this.size) this.pos.x = -this.size;
+              if (this.pos.y < -this.size) this.pos.y = this.p.height + this.size;
+              if (this.pos.y > this.p.height + this.size) this.pos.y = -this.size;
+          }
+
+          show() {
+              const n = this.p.noise(this.pos.x * 0.002, this.pos.y * 0.002, this.p.frameCount * 0.005);
+              // Smoky colors: Deep purple/blue haze
+              this.p.noStroke();
+              this.p.fill(30, 20, 60, 2 * n); // Very low alpha, modulated by noise
+              this.p.circle(this.pos.x, this.pos.y, this.size * n + 100);
+          }
+      }
+
+      // --- RIBBON PARTICLE CLASS ---
+      class RibbonParticle {
         p: p5;
         pos: p5.Vector;
         vel: p5.Vector;
         acc: p5.Vector;
         maxSpeed: number;
         maxForce: number;
-        baseColor: p5.Color;
-        size: number;
+        col: p5.Color;
+        targetCol: p5.Color;
 
         constructor(p: p5) {
           this.p = p;
           this.pos = p.createVector(p.random(p.width), p.random(p.height));
           this.vel = p.createVector(p.random(-1, 1), p.random(-1, 1));
           this.acc = p.createVector(0, 0);
-          this.maxSpeed = 4;
+          this.maxSpeed = 5;
           this.maxForce = 0.2;
-          this.size = p.random(3, 6);
-
-          // Neon Noir Palette
-          const r = p.random();
-          if (r < 0.4) this.baseColor = p.color(0, 255, 255, 180); // Cyan
-          else if (r < 0.7) this.baseColor = p.color(180, 0, 255, 180); // Purple
-          else this.baseColor = p.color(255, 215, 0, 180); // Gold
+          this.col = p.color(50, 0, 120, 100);
+          this.targetCol = this.col;
         }
 
         applyForce(force: p5.Vector) {
             this.acc.add(force);
         }
 
-        separate(particles: Particle[]) {
-            let desiredSeparation = 25;
+        updateColor(target: p5.Color) {
+            this.targetCol = target;
+            // Lerp color manually for performance or use p5 lerpColor
+            this.col = this.p.lerpColor(this.col, this.targetCol, 0.05);
+        }
+
+        separate(particles: RibbonParticle[]) {
+            let desiredSeparation = 20;
             let steer = this.p.createVector(0, 0);
             let count = 0;
-            
-            // Optimization for loop
+            // Optimization: check fewer neighbors or use spatial hash (not implemented here for simplicity)
+            // Just limit loop or radius
             for (let i = 0; i < particles.length; i++) {
                 const other = particles[i];
                 if (other === this) continue;
-
                 const d = p5.Vector.dist(this.pos, other.pos);
-                
                 if (d > 0 && d < desiredSeparation) {
                     let diff = p5.Vector.sub(this.pos, other.pos);
                     diff.normalize();
@@ -285,12 +318,9 @@ const JazzCanvas: React.FC<JazzCanvasProps> = ({ appState, setAppState }) => {
                     steer.add(diff);
                     count++;
                 }
+                // Break early for performance if swarm is dense? No, keeps flow smooth.
             }
-
-            if (count > 0) {
-                steer.div(count);
-            }
-
+            if (count > 0) steer.div(count);
             if (steer.mag() > 0) {
                 steer.normalize();
                 steer.mult(this.maxSpeed);
@@ -304,7 +334,6 @@ const JazzCanvas: React.FC<JazzCanvasProps> = ({ appState, setAppState }) => {
             let desired = p5.Vector.sub(target, this.pos);
             desired.normalize();
             desired.mult(this.maxSpeed);
-            
             let steer = p5.Vector.sub(desired, this.vel);
             steer.limit(this.maxForce);
             return steer;
@@ -315,14 +344,13 @@ const JazzCanvas: React.FC<JazzCanvasProps> = ({ appState, setAppState }) => {
             let zOff = this.p.frameCount * 0.003;
             let noiseVal = this.p.noise(this.pos.x * scale, this.pos.y * scale, zOff);
             let angle = noiseVal * this.p.TWO_PI * 4;
-            let flowForce = p5.Vector.fromAngle(angle);
-            return flowForce;
+            return p5.Vector.fromAngle(angle);
         }
 
         update() {
             this.vel.add(this.acc);
             this.vel.limit(this.maxSpeed);
-            this.vel.mult(0.96); // Friction
+            this.vel.mult(0.96); 
             this.pos.add(this.vel);
             this.acc.mult(0); 
         }
@@ -335,9 +363,13 @@ const JazzCanvas: React.FC<JazzCanvasProps> = ({ appState, setAppState }) => {
         }
 
         show() {
-            this.p.noStroke();
-            this.p.fill(this.baseColor);
-            this.p.circle(this.pos.x, this.pos.y, this.size);
+            // Draw Ribbon (Line oriented by velocity)
+            this.p.stroke(this.col);
+            this.p.strokeWeight(2);
+            // Tail length depends on speed
+            const speed = this.vel.mag();
+            const tail = p5.Vector.mult(this.vel, 3 + speed); // Longer tail at speed
+            this.p.line(this.pos.x, this.pos.y, this.pos.x - tail.x, this.pos.y - tail.y);
         }
       }
     };
@@ -355,7 +387,7 @@ const JazzCanvas: React.FC<JazzCanvasProps> = ({ appState, setAppState }) => {
       <video ref={videoRef} className="hidden" playsInline muted autoPlay />
       <div ref={containerRef} className="w-full h-full" />
       {debugMsg && (
-        <div className="absolute top-4 left-4 text-xs text-gray-500 font-mono pointer-events-none z-50">
+        <div className="absolute top-4 left-4 text-xs text-gray-500 font-mono pointer-events-none z-50 mix-blend-difference">
           {debugMsg}
         </div>
       )}
