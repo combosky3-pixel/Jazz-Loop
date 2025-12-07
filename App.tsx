@@ -10,6 +10,7 @@ const App: React.FC = () => {
   // Recording Refs
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedChunksRef = useRef<Blob[]>([]);
+  const recordingMimeTypeRef = useRef<string>(''); // Store the selected format
 
   const startExperience = async () => {
     setAppState(AppState.LOADING);
@@ -30,6 +31,25 @@ const App: React.FC = () => {
     }
   };
 
+  // Smart Format Selector Logic
+  const getSupportedMimeType = (): string => {
+    const types = [
+      'video/mp4; codecs=h264,aac',     // Safari / Broad compatibility
+      'video/mp4',                      // Generic MP4
+      'video/webm; codecs=vp9,opus',    // Chrome High Quality
+      'video/webm; codecs=vp8,opus',    // Chrome Standard
+      'video/webm'                      // Fallback
+    ];
+
+    for (const type of types) {
+      if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(type)) {
+        console.log(`Video Recorder using: ${type}`);
+        return type;
+      }
+    }
+    return ''; // Let browser choose default
+  };
+
   const startVideoRecording = () => {
     // 1. Get Canvas Stream
     const canvasElement = document.querySelector('canvas');
@@ -37,7 +57,7 @@ const App: React.FC = () => {
         console.error("Canvas not found for recording");
         return;
     }
-    // captureStream is not strictly in standard definitions for all browsers in TS, casting to any
+    // captureStream casting for TS
     const canvasStream = (canvasElement as any).captureStream(30); // 30 FPS
     const videoTrack = canvasStream.getVideoTracks()[0];
 
@@ -52,18 +72,15 @@ const App: React.FC = () => {
     // 3. Combine Streams
     const combinedStream = new MediaStream([videoTrack, audioTrack]);
 
-    // 4. Initialize Recorder
+    // 4. Initialize Recorder with Smart Format
     try {
-        // Try high quality codec first
-        const options = { mimeType: 'video/webm; codecs=vp9,opus' };
-        // Fallback checks (simple version)
-        if (!MediaRecorder.isTypeSupported(options.mimeType)) {
-             console.warn("VP9/Opus not supported, falling back to default webm");
-             // @ts-ignore
-             options.mimeType = 'video/webm'; 
-        }
+        const chosenMimeType = getSupportedMimeType();
+        const options = chosenMimeType ? { mimeType: chosenMimeType } : undefined;
 
         const recorder = new MediaRecorder(combinedStream, options);
+        
+        // Store actual mime type for saving later
+        recordingMimeTypeRef.current = chosenMimeType || recorder.mimeType;
         recordedChunksRef.current = [];
 
         recorder.ondataavailable = (event) => {
@@ -91,10 +108,14 @@ const App: React.FC = () => {
   };
 
   const saveVideoRecording = () => {
-      const blob = new Blob(recordedChunksRef.current, { type: 'video/webm' });
+      const mimeType = recordingMimeTypeRef.current || 'video/webm';
+      // Determine extension based on chosen format
+      const extension = mimeType.includes('mp4') ? 'mp4' : 'webm';
+      
+      const blob = new Blob(recordedChunksRef.current, { type: mimeType });
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
-      anchor.download = "My_Jazz_Performance.webm";
+      anchor.download = `My_Jazz_Performance.${extension}`;
       anchor.href = url;
       anchor.click();
       
@@ -178,7 +199,7 @@ const App: React.FC = () => {
       {appState === AppState.RUNNING && (
         <div className="absolute bottom-6 right-6 z-40 pointer-events-none">
            <div className="text-white/30 text-xs font-mono">
-              The Jazz Fluid Conductor v2.0 • A/V Recording Enabled
+              The Jazz Fluid Conductor v2.1 • A/V Recording (Smart Format)
            </div>
         </div>
       )}
