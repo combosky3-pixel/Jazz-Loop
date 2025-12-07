@@ -1,0 +1,8 @@
+{
+  "name": "The Jazz Fluid Conductor",
+  "description": "An interactive generative art and jazz improvisation experience driven by hand gestures using MediaPipe, P5.js, and Tone.js.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
