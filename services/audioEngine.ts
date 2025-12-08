@@ -19,6 +19,7 @@ const FUNK_SCALE_LEFT = ['E3', 'G3', 'A3', 'B3', 'D4', 'E4']; // Rhythm Guitar c
 class AudioEngine {
   // Master
   private limiter: Tone.Limiter | null = null;
+  private meter: Tone.Meter | null = null;
   private audioDest: MediaStreamAudioDestinationNode | null = null;
   private reverb: Tone.Reverb | null = null;
   private currentGenre: GameGenre = GameGenre.JAZZ;
@@ -55,12 +56,27 @@ class AudioEngine {
     await Tone.start();
     
     this.limiter = new Tone.Limiter(-1).toDestination();
+    // Add Meter to measure output level for visuals
+    this.meter = new Tone.Meter();
+    this.limiter.connect(this.meter);
+
     const context = Tone.context.rawContext as AudioContext;
     this.audioDest = context.createMediaStreamDestination();
     this.limiter.connect(this.audioDest);
     
     this.reverb = new Tone.Reverb({ decay: 2.0, wet: 0.2 }).connect(this.limiter);
     this.isInitialized = true;
+  }
+
+  public getEnergy(): number {
+    if (!this.meter) return 0;
+    // Tone.Meter returns decibels (approx -Infinity to 0).
+    // Convert to linear gain (0 to 1) for easier visual mapping.
+    const db = this.meter.getValue();
+    if (typeof db === 'number') {
+        return Tone.dbToGain(db);
+    }
+    return 0;
   }
 
   public stop() {

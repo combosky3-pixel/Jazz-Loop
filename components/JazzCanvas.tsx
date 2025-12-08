@@ -23,9 +23,9 @@ const JazzCanvas: React.FC<JazzCanvasProps> = ({ appState, setAppState, genre })
 
   // Global Beat/Note flash references for visual reactivity
   const beatFlashRef = useRef(0);
-  const noteTriggersRef = useRef<{x: number, y: number, life: number}[]>([]);
+  const noteTriggersRef = useRef<{x: number, y: number, life: number, type: 'left'|'right'}[]>([]);
 
-  const [debugMsg, setDebugMsg] = useState("Initializing Generative Visuals...");
+  const [debugMsg, setDebugMsg] = useState("Initializing Dual-Hand Generative System...");
 
   // --- Hand Tracking Logic ---
   const getHandOpenness = (landmarks: any[]): number => {
@@ -47,12 +47,15 @@ const JazzCanvas: React.FC<JazzCanvasProps> = ({ appState, setAppState, genre })
 
     // Connect Audio Events to Visuals
     audioEngine.onBeat((type) => {
-        beatFlashRef.current = 1.0; // Flash intensity
+        beatFlashRef.current = 1.0; 
     });
 
     audioEngine.onNoteTriggered((type, x, y) => {
-        // Add a burst/ripple at this location
-        noteTriggersRef.current.push({ x, y, life: 1.0 });
+        // Trigger visual bursts
+        // Guess hand based on x position if not explicit (Left < 0.5, Right > 0.5)
+        // Note: x is 0-1
+        const t = type === 'RHYTHM' ? 'left' : 'right';
+        noteTriggersRef.current.push({ x, y, life: 1.0, type: t });
     });
 
     // Start Hand Tracking
@@ -90,11 +93,10 @@ const JazzCanvas: React.FC<JazzCanvasProps> = ({ appState, setAppState, genre })
     const sketch = (p: p5) => {
       let particles: any[] = [];
       
-      // Hand Velocity Tracking
+      // Physics & Energy State
+      let smoothedAudio = 0;
       let prevLeftHand: p5.Vector | null = null;
       let prevRightHand: p5.Vector | null = null;
-      
-      // Mode-specific globals
       let globalHue = 0;
       let vortexAngle = 0;
 
@@ -108,9 +110,9 @@ const JazzCanvas: React.FC<JazzCanvasProps> = ({ appState, setAppState, genre })
         particles = [];
         let count = 0;
         
-        if (genre === GameGenre.JAZZ) count = 350; // Liquid
-        else if (genre === GameGenre.FUNK) count = 300; // Vortex
-        else if (genre === GameGenre.ELECTRONIC) count = 80; // Neural Grid (fewer for connections)
+        if (genre === GameGenre.JAZZ) count = 300; 
+        else if (genre === GameGenre.FUNK) count = 250; 
+        else if (genre === GameGenre.ELECTRONIC) count = 60; // Slightly fewer nodes for cleaner connection web
 
         for (let i = 0; i < count; i++) {
           if (genre === GameGenre.JAZZ) particles.push(new LiquidParticle(p));
@@ -120,342 +122,352 @@ const JazzCanvas: React.FC<JazzCanvasProps> = ({ appState, setAppState, genre })
       };
 
       p.draw = () => {
-        // 0. UPDATE HAND PHYSICS (Calculate Velocities)
+        // --- 1. GLOBAL STATE UPDATES ---
+        
+        // Audio Energy Analysis
+        const rawEnergy = audioEngine.getEnergy(); // 0.0 to 1.0 (linear)
+        smoothedAudio = p.lerp(smoothedAudio, rawEnergy, 0.15); // Snappier response
+        
+        // Hand Vectors
         const currentHands = handStateRef.current;
         const leftVec = currentHands.left ? p.createVector(currentHands.left.x * p.width, currentHands.left.y * p.height) : null;
         const rightVec = currentHands.right ? p.createVector(currentHands.right.x * p.width, currentHands.right.y * p.height) : null;
 
+        // Velocity calc
         const leftVel = (leftVec && prevLeftHand) ? p5.Vector.sub(leftVec, prevLeftHand) : p.createVector(0,0);
         const rightVel = (rightVec && prevRightHand) ? p5.Vector.sub(rightVec, prevRightHand) : p.createVector(0,0);
-
-        // Update prev for next frame
         prevLeftHand = leftVec ? leftVec.copy() : null;
         prevRightHand = rightVec ? rightVec.copy() : null;
 
         const handVels = { left: leftVel, right: rightVel };
+        const handPos = { left: leftVec, right: rightVec };
 
-
-        // 1. TRAIL EFFECT (Blend Mode Trick)
+        // --- 2. BACKGROUND & AMBIANCE ---
+        
         p.blendMode(p.BLEND);
         
-        let bgAlpha = 10;
-        if (genre === GameGenre.JAZZ) bgAlpha = 12; // Slightly faster fade for dynamic jazz
-        if (genre === GameGenre.FUNK) bgAlpha = 20; 
-        if (genre === GameGenre.ELECTRONIC) bgAlpha = 25; 
-
-        // Flash background on beat
-        if (beatFlashRef.current > 0.01) {
-            p.fill(0, 0, 20 * beatFlashRef.current, bgAlpha + 10);
-            beatFlashRef.current *= 0.9;
+        if (genre === GameGenre.ELECTRONIC) {
+            // Mode 2: Techno Strobe Logic
+            // Background reacts to audio level (0 to 15 brightness)
+            // This replaces the solid black with a pulsating dark grey
+            const strobeVal = Math.min(25, smoothedAudio * 25);
+            p.background(0, 0, strobeVal);
         } else {
-            p.fill(0, bgAlpha);
+            // Modes 0 & 1: Trail Logic
+            // Background alpha changes with energy (Pump effect)
+            let bgAlpha = 20;
+            if (smoothedAudio > 0.4) bgAlpha = 35; // Clears trail faster on high energy
+            
+            // Flash background on beat (using beatFlashRef from AudioEngine callback)
+            if (beatFlashRef.current > 0.01) {
+                p.background(0, 0, 10 + (20 * beatFlashRef.current));
+                beatFlashRef.current *= 0.85;
+            } else {
+                p.background(0, bgAlpha);
+            }
         }
-        
-        p.rect(0, 0, p.width, p.height);
 
-        // 2. RENDER PARTICLES (Glowing Mode)
+        // --- 3. RENDER CONTENT ---
         p.blendMode(p.ADD);
         
-        // Slowly shift global hue for atmosphere
-        globalHue = (p.frameCount * 0.1) % 360;
+        // Global Hue Rotation
+        globalHue = (p.frameCount * 0.2) % 360;
 
-        // Render Triggers (Bursts from notes)
+        // Render Note Bursts (Dual Color System)
         for(let i = noteTriggersRef.current.length - 1; i >= 0; i--) {
             const t = noteTriggersRef.current[i];
             p.noFill();
-            p.strokeWeight(3);
-            p.stroke(0, 0, 100, t.life * 100);
-            p.circle(t.x * p.width, t.y * p.height, (1.0 - t.life) * 200);
-            t.life -= 0.05;
+            // Left (Bass) = Cyan/Purple, Right (Lead) = Orange/Gold
+            let h = t.type === 'left' ? 200 : 40; 
+            p.stroke(h, 80, 100, t.life * 100);
+            p.strokeWeight(3 + (smoothedAudio * 5));
+            p.circle(t.x * p.width, t.y * p.height, (1.0 - t.life) * 300);
+            t.life -= 0.04;
             if(t.life <= 0) noteTriggersRef.current.splice(i, 1);
         }
 
-        // Render Mode Specifics
+        // --- MODE SPECIFIC DRAWING ---
         if (genre === GameGenre.JAZZ) {
-            drawEtherealLiquid(p, particles, handVels);
+            drawJazzMode(p, particles, handPos, handVels, smoothedAudio);
         } else if (genre === GameGenre.FUNK) {
-            drawVortex(p, particles, globalHue);
+            drawFunkMode(p, particles, handPos, smoothedAudio, globalHue);
         } else if (genre === GameGenre.ELECTRONIC) {
-            drawNeuralGrid(p, particles);
+            drawElectronicMode(p, particles, handPos, smoothedAudio);
         }
       };
 
-      // --- MODE 0: HIGH-ENERGY FLUID JAZZ (UPDATED) ---
+      // =================================================================
+      // MODE 0: JAZZ (Dual-Hand Liquid Flow)
+      // =================================================================
       class LiquidParticle {
-        pos: p5.Vector; 
-        vel: p5.Vector; 
-        acc: p5.Vector;
-        prevPos: p5.Vector;
-        maxSpeed: number; 
-        
+        pos: p5.Vector; vel: p5.Vector; acc: p5.Vector; prevPos: p5.Vector;
+        maxSpeed: number; baseMaxSpeed: number;
+
         constructor(p: p5) {
             this.pos = p.createVector(p.random(p.width), p.random(p.height));
             this.prevPos = this.pos.copy();
             this.vel = p.createVector(0,0);
             this.acc = p.createVector(0,0);
-            this.maxSpeed = p.random(6, 15); // High speed capability
+            this.baseMaxSpeed = p.random(2, 5);
+            this.maxSpeed = this.baseMaxSpeed;
         }
 
-        update(p: p5, hands: HandState, handVels: {left: p5.Vector, right: p5.Vector}) {
+        update(p: p5, hands: {left: p5.Vector|null, right: p5.Vector|null}, audio: number) {
             this.prevPos = this.pos.copy();
             
-            // 1. Base Flow (Perlin Noise) - keeps it alive naturally
+            // Audio Energy increases chaotic movement
             let nScale = 0.005;
-            let angle = p.noise(this.pos.x * nScale, this.pos.y * nScale, p.frameCount * 0.005) * p.TWO_PI * 4;
-            let flowForce = p5.Vector.fromAngle(angle);
-            flowForce.mult(0.5); // Gentle base flow
-            this.acc.add(flowForce);
+            let timeScale = p.frameCount * (0.005 + (audio * 0.02)); 
+            let angle = p.noise(this.pos.x * nScale, this.pos.y * nScale, timeScale) * p.TWO_PI * 4;
+            let flow = p5.Vector.fromAngle(angle);
+            flow.mult(0.5 + (audio * 2)); // Stronger flow on loud audio
+            this.acc.add(flow);
 
-            // 2. Interaction Logic
-            const interact = (h: {x:number, y:number} | null, hVel: p5.Vector) => {
-                if (!h) return;
-                let handPos = p.createVector(h.x * p.width, h.y * p.height);
-                let dir = p5.Vector.sub(handPos, this.pos);
+            // Hand Gravity
+            const applyHandForce = (hPos: p5.Vector | null) => {
+                if(!hPos) return;
+                let dir = p5.Vector.sub(hPos, this.pos);
                 let d = dir.mag();
-                
-                // Interaction Radius
                 if (d < 400) {
-                    // Attraction / Gravity (The Conductor's Pull)
                     dir.normalize();
-                    let attractionStr = p.map(d, 0, 400, 1.5, 0); 
-                    dir.mult(attractionStr);
+                    dir.mult(0.5); 
                     this.acc.add(dir);
-
-                    // Hand Velocity Injection (Turbulence/Drag)
-                    // If hand is moving fast, pull particles along with it (The Swirl)
-                    let velMag = hVel.mag();
-                    if (velMag > 5) { // Threshold for "Fast" movement
-                        let dragForce = hVel.copy();
-                        dragForce.normalize();
-                        // Massive force if close and hand is fast
-                        dragForce.mult(p.map(d, 0, 300, 4, 0) * (velMag * 0.05)); 
-                        this.acc.add(dragForce);
-                        
-                        // Add some chaotic turbulence
-                        let turb = p5.Vector.random2D();
-                        turb.mult(1.5);
-                        this.acc.add(turb);
-                    }
                 }
             };
+            applyHandForce(hands.left);
+            applyHandForce(hands.right);
 
-            interact(hands.left, handVels.left);
-            interact(hands.right, handVels.right);
-
-            // 3. Physics
             this.vel.add(this.acc);
+            this.maxSpeed = this.baseMaxSpeed * (1 + audio * 3); // Velocity scales with volume
             this.vel.limit(this.maxSpeed);
-            this.vel.mult(0.94); // Friction/Damping to simulate fluid
             this.pos.add(this.vel);
-            this.acc.mult(0); // Reset acceleration
+            this.acc.mult(0);
 
-            // 4. Wrap around
+            // Wrap
             if (this.pos.x > p.width) { this.pos.x = 0; this.prevPos.x = this.pos.x; }
             if (this.pos.x < 0) { this.pos.x = p.width; this.prevPos.x = this.pos.x; }
             if (this.pos.y > p.height) { this.pos.y = 0; this.prevPos.y = this.pos.y; }
             if (this.pos.y < 0) { this.pos.y = p.height; this.prevPos.y = this.pos.y; }
         }
 
-        show(p: p5) {
-            let speed = this.vel.mag();
-            let speedNorm = p.constrain(speed / (this.maxSpeed * 0.8), 0, 1);
-            
-            // Dynamic Color Logic
-            // Slow: Cool Jazz (Deep Blue/Purple) -> Hue 230-280
-            // Fast: Hot Energy (Gold/White) -> Hue 40-60, Low Saturation
-            
-            let h, s, b, alpha;
-            
-            if (speedNorm < 0.3) {
-                // COOL STATE
-                h = p.map(speedNorm, 0, 0.3, 230, 280);
-                s = 80;
-                b = p.map(speedNorm, 0, 0.3, 50, 80);
-                alpha = p.map(speedNorm, 0, 0.3, 40, 70);
+        show(p: p5, hands: {left: p5.Vector|null, right: p5.Vector|null}, audio: number) {
+            // Dual Color Logic
+            let leftDist = hands.left ? p.dist(this.pos.x, this.pos.y, hands.left.x, hands.left.y) : 9999;
+            let rightDist = hands.right ? p.dist(this.pos.x, this.pos.y, hands.right.x, hands.right.y) : 9999;
+
+            let hueVal;
+            if (leftDist < rightDist && leftDist < 500) {
+                 // Closer to Left (Cool: 200-260)
+                 let mapDist = p.map(leftDist, 0, 500, 0, 1);
+                 hueVal = p.lerp(200, 260, mapDist);
+            } else if (rightDist <= leftDist && rightDist < 500) {
+                 // Closer to Right (Warm: 340-40)
+                 let mapDist = p.map(rightDist, 0, 500, 0, 1);
+                 hueVal = p.lerp(40, 340, mapDist);
             } else {
-                // HOT STATE
-                // Map remainder of speed to wrap around purple -> red -> orange -> gold
-                let hMap = p.map(speedNorm, 0.3, 1, 280, 400); 
-                h = hMap % 360; 
-                
-                // Saturation drops as it gets hotter (whiter)
-                s = p.map(speedNorm, 0.3, 1, 80, 10); 
-                b = 100; // Max brightness
-                alpha = p.map(speedNorm, 0.3, 1, 70, 100);
+                 // Neutral (Background flow)
+                 hueVal = 220 + (Math.sin(p.frameCount * 0.01) * 20);
             }
 
-            p.stroke(h, s, b, alpha);
-            
-            // Variable Stroke Weight & Length
-            // Faster = Thicker stroke
-            let sw = p.map(speedNorm, 0, 1, 1.5, 4);
-            p.strokeWeight(sw);
-            
-            // Draw line from prevPos to pos (creates stretch effect)
+            // Energy Brightness
+            let sat = p.map(audio, 0, 1, 80, 20); // High energy = closer to white (low sat)
+            let bri = p.map(audio, 0, 1, 60, 100);
+            let alpha = p.map(audio, 0, 1, 40, 90);
+
+            p.stroke(hueVal, sat, bri, alpha);
+            p.strokeWeight(1 + (audio * 4));
             p.line(this.prevPos.x, this.prevPos.y, this.pos.x, this.pos.y);
         }
       }
 
-      function drawEtherealLiquid(p: p5, particles: LiquidParticle[], handVels: {left: p5.Vector, right: p5.Vector}) {
-          particles.forEach(pt => {
-              pt.update(p, handStateRef.current, handVels);
-              pt.show(p);
+      function drawJazzMode(p: p5, pts: LiquidParticle[], hPos: any, hVels: any, audio: number) {
+          pts.forEach(pt => {
+              pt.update(p, hPos, audio);
+              pt.show(p, hPos, audio);
           });
       }
 
-
-      // --- MODE 1: 3D VORTEX (FUNK) ---
+      // =================================================================
+      // MODE 1: FUNK (Reactive Spiral)
+      // =================================================================
       class VortexParticle {
         x: number; y: number; z: number;
-        angle: number; radius: number; speed: number;
-        oX: number; oY: number; // Original normalized coords -1 to 1
+        angleOffset: number;
+        baseColorHue: number;
 
         constructor(p: p5) {
             this.respawn(p);
-            this.z = p.random(100, 2000); // Start anywhere in tunnel
+            this.z = p.random(100, 2000);
+            this.baseColorHue = p.random(0, 360);
         }
 
         respawn(p: p5) {
             this.x = p.random(-p.width, p.width);
             this.y = p.random(-p.height, p.height);
-            this.z = p.random(1000, 2000); // Start deep
-            this.oX = p.random(-1, 1);
-            this.oY = p.random(-1, 1);
-            this.speed = p.random(10, 30);
+            this.z = p.random(1000, 2000); 
+            this.angleOffset = p.random(0, p.TWO_PI);
         }
 
-        update(p: p5, hands: HandState) {
-            this.z -= (this.speed + (beatFlashRef.current * 50)); // Beat speed boost
-            
-            // Hands control twist/rotation speed
-            let twist = 0.02;
-            if (hands.right || hands.left) twist = 0.05;
-            vortexAngle += twist * 0.01; // Global twist accumulator
-
-            if (this.z < 1) {
-                this.respawn(p);
-            }
+        update(p: p5, audio: number) {
+            // Speed increases with beat
+            this.z -= (15 + (audio * 100)); 
+            if (this.z < 1) this.respawn(p);
         }
 
-        show(p: p5, gHue: number) {
+        show(p: p5, hPos: {left: p5.Vector|null, right: p5.Vector|null}, audio: number, gHue: number) {
             let cx = p.width / 2;
             let cy = p.height / 2;
-            
-            // 3D Projection
-            // Rotate (x,y) around Z axis
-            let ang = p.atan2(this.y, this.x) + vortexAngle + (this.z * 0.002);
-            let rad = p.dist(0,0, this.x, this.y);
-            
+
+            // Audio expands the ring
+            let expansion = 1 + (audio * 0.5);
+
+            // Global rotation determined by hands
+            let rot = vortexAngle;
+            if (hPos.left) rot -= 0.5; 
+            if (hPos.right) rot += 0.5;
+
+            // Projection
+            let ang = p.atan2(this.y, this.x) + rot + (this.z * 0.001);
+            let rad = p.dist(0,0, this.x, this.y) * expansion;
+
             let rx = p.cos(ang) * rad;
             let ry = p.sin(ang) * rad;
 
             let sx = p.map(rx / this.z, 0, 1, 0, p.width/2);
             let sy = p.map(ry / this.z, 0, 1, 0, p.height/2);
-            
-            // Size grows as it gets closer
-            let r = p.map(this.z, 0, 2000, 20, 0); 
-            
-            // Funk Palette: Pink/Green/Orange
-            // Color shifts based on Z depth
-            let h = (gHue + (this.z * 0.1) + (this.x * 0.1)) % 360;
-            
-            p.fill(h, 90, 100, p.map(this.z, 0, 2000, 100, 0));
+            let r = p.map(this.z, 0, 2000, 30 * expansion, 0);
+
+            let hue = (gHue + (this.z * 0.1)) % 360;
+            if (hPos.left && !hPos.right) hue = (160 + (this.z*0.1)) % 360;
+            if (hPos.right && !hPos.left) hue = (320 + (this.z*0.1)) % 360;
+
+            let bri = p.map(this.z, 0, 2000, 100, 0);
             p.noStroke();
+            p.fill(hue, 80, bri);
             p.ellipse(cx + sx, cy + sy, r);
         }
       }
 
-      function drawVortex(p: p5, particles: VortexParticle[], gHue: number) {
+      function drawFunkMode(p: p5, pts: VortexParticle[], hPos: any, audio: number, gHue: number) {
+          if (hPos.left) vortexAngle -= 0.02;
+          if (hPos.right) vortexAngle += 0.02;
+          
           p.push();
-          particles.forEach(pt => {
-              pt.update(p, handStateRef.current);
-              pt.show(p, gHue);
+          pts.forEach(pt => {
+              pt.update(p, audio);
+              pt.show(p, hPos, audio, gHue);
           });
           p.pop();
       }
 
-
-      // --- MODE 2: ACTIVE NEURAL GRID (ELECTRONIC) ---
+      // =================================================================
+      // MODE 2: ELECTRONIC (Cyber Network / System Overload)
+      // =================================================================
       class NeuralNode {
         pos: p5.Vector; vel: p5.Vector;
-        baseSize: number;
+        type: 'neutral' | 'left' | 'right';
         id: number;
 
         constructor(p: p5) {
             this.pos = p.createVector(p.random(p.width), p.random(p.height));
-            this.vel = p5.Vector.random2D().mult(p.random(0.5, 1.5));
-            this.baseSize = p.random(4, 10);
+            this.vel = p5.Vector.random2D().mult(2);
+            this.type = 'neutral';
             this.id = Math.random();
         }
 
-        update(p: p5, hands: HandState) {
+        update(p: p5, hPos: {left: p5.Vector|null, right: p5.Vector|null}, audio: number) {
             this.pos.add(this.vel);
             
             // Bounce
             if (this.pos.x < 0 || this.pos.x > p.width) this.vel.x *= -1;
             if (this.pos.y < 0 || this.pos.y > p.height) this.vel.y *= -1;
 
-            // Hand Interaction (Glitch/Shake)
-            let isGlitching = false;
-            const checkGlitch = (h: {x:number, y:number} | null) => {
-                if(!h) return;
-                let d = p.dist(this.pos.x, this.pos.y, h.x * p.width, h.y * p.height);
-                if (d < 150) isGlitching = true;
-            }
-            checkGlitch(hands.left);
-            checkGlitch(hands.right);
+            // Determine Type based on proximity
+            let dLeft = hPos.left ? p.dist(this.pos.x, this.pos.y, hPos.left.x, hPos.left.y) : 9999;
+            let dRight = hPos.right ? p.dist(this.pos.x, this.pos.y, hPos.right.x, hPos.right.y) : 9999;
 
-            if (isGlitching) {
-                // Shake violently
-                this.pos.x += p.random(-5, 5);
-                this.pos.y += p.random(-5, 5);
+            if (dLeft < 250) this.type = 'left';
+            else if (dRight < 250) this.type = 'right';
+            else this.type = 'neutral';
+
+            // Audio Glitch / Shake
+            if (audio > 0.6 && Math.random() > 0.8) {
+                this.pos.x += p.random(-10, 10);
+                this.pos.y += p.random(-10, 10);
             }
         }
 
         show(p: p5) {
-            // Pulse size
-            let s = this.baseSize + Math.sin(p.frameCount * 0.1 + this.id * 10) * 3;
-            // Electronic Green/Pink
-            p.fill(this.id > 0.5 ? 120 : 320, 90, 100, 80);
+            let hue = 0;
+            if (this.type === 'left') hue = 200; // Blue
+            else if (this.type === 'right') hue = 0; // Red
+            else hue = 120; // Green neutral
+
+            p.fill(hue, 90, 100);
             p.noStroke();
-            p.ellipse(this.pos.x, this.pos.y, s);
+            p.circle(this.pos.x, this.pos.y, 6);
         }
       }
 
-      function drawNeuralGrid(p: p5, nodes: NeuralNode[]) {
-          // Update & Draw Nodes
-          nodes.forEach(n => {
-              n.update(p, handStateRef.current);
-              n.show(p);
-          });
+      function drawElectronicMode(p: p5, nodes: NeuralNode[], hPos: any, audio: number) {
+          p.push();
+          
+          // 1. Camera Effects (Beat Reaction)
+          // Center coordinate system for zoom
+          p.translate(p.width / 2, p.height / 2);
 
-          // Draw Connections & Data Packets
-          p.strokeWeight(1);
-          const maxDist = 150;
+          // Global Zoom: "Breathe" with the bass
+          // scale(1.0 + audioLevel * 0.05)
+          let zoomFactor = 1.0 + (audio * 0.08); // Slight boost to 0.08 for visibility
+          p.scale(zoomFactor);
+
+          // Screen Shake: If high energy (Techno Kick)
+          if (audio > 0.6) {
+             let shakeVal = (audio - 0.6) * 40; 
+             p.translate(p.random(-shakeVal, shakeVal), p.random(-shakeVal, shakeVal));
+          }
+
+          // Move back to top-left origin for drawing nodes
+          p.translate(-p.width / 2, -p.height / 2);
+
+          // 2. Draw Connections
+          // AudioLevel controls line thickness
+          p.strokeWeight(1 + (audio * 8)); 
           
           for (let i = 0; i < nodes.length; i++) {
+              let n1 = nodes[i];
               for (let j = i + 1; j < nodes.length; j++) {
-                  let n1 = nodes[i];
                   let n2 = nodes[j];
                   let d = p.dist(n1.pos.x, n1.pos.y, n2.pos.x, n2.pos.y);
+                  
+                  // Connection threshold increases with energy
+                  let connectDist = 180 + (audio * 100);
 
-                  if (d < maxDist) {
-                      let alpha = p.map(d, 0, maxDist, 80, 0);
-                      p.stroke(200, 50, 100, alpha); // Cyan lines
-                      p.line(n1.pos.x, n1.pos.y, n2.pos.x, n2.pos.y);
-
-                      // Data Packet (Simulated traveling dot)
-                      // Use Noise/Math to move a dot along the line based on time
-                      let packetPos = (p.frameCount * 0.05 + n1.id * 10 + n2.id * 10) % 1.0;
-                      let px = p.lerp(n1.pos.x, n2.pos.x, packetPos);
-                      let py = p.lerp(n1.pos.y, n2.pos.y, packetPos);
+                  if (d < connectDist) {
+                      let alpha = p.map(d, 0, connectDist, 100, 0);
                       
-                      p.noStroke();
-                      p.fill(0, 0, 100); // White bright packet
-                      p.ellipse(px, py, 4);
+                      let c1;
+                      if (n1.type === 'left') c1 = p.color(200, 90, 100);
+                      else if (n1.type === 'right') c1 = p.color(0, 90, 100);
+                      else c1 = p.color(120, 50, 80);
+                      
+                      // Intensity: High Audio = Brighter, Whiter lines
+                      if (audio > 0.5) {
+                          let bleach = p.map(audio, 0.5, 1.0, 0, 1);
+                          let s = p.lerp(p.saturation(c1), 0, bleach); // Desaturate to white
+                          p.stroke(p.hue(c1), s, 100, alpha);
+                      } else {
+                          p.stroke(p.hue(c1), p.saturation(c1), p.brightness(c1), alpha);
+                      }
+                      
+                      p.line(n1.pos.x, n1.pos.y, n2.pos.x, n2.pos.y);
                   }
               }
+              // Update and draw node
+              n1.update(p, hPos, audio);
+              n1.show(p);
           }
+          p.pop();
       }
 
       p.windowResized = () => {
